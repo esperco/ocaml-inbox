@@ -1,5 +1,16 @@
 FILES[] = 
   json
+  thread_id
+  namespace_id
+  account_id
+  tag_id
+  message_id
+  draft_id
+  file_id
+  calendar_id
+  event_id
+  event_participant_id
+  access_token
   inbox_t
   inbox_j
   inbox_v
