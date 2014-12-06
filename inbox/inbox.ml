@@ -69,73 +69,79 @@ let get_namespace ~access_token ~app id  =
   call_parse ~access_token `GET Inbox_j.namespace_of_string uri
 
 
+type access = {
+  access_token : Access_token.t;
+  app : Inbox_app.t;
+  namespace_id : Namespace_id.t;
+}
+
 (* Email APIs *)
 
 (* Threads *)
-let get_threads ~access_token ~app namespace_id filters =
+let get_threads { access_token; app; namespace_id } filters =
   let uri =
     Filter.add_query filters (api_path app ("/n/" ^ namespace_id ^ "/threads"))
   in
   call_parse ~access_token `GET Inbox_j.thread_list_of_string uri
 
-let get_thread ~access_token ~app namespace_id thread_id =
+let get_thread { access_token; app; namespace_id } thread_id =
   let uri = api_path app ("/n/" ^ namespace_id ^ "/threads/" ^ thread_id) in
   call_parse ~access_token `GET Inbox_j.thread_of_string uri
 
 (* Message *)
-let get_messages ~access_token ~app namespace_id filters =
+let get_messages { access_token; app; namespace_id } filters =
   let uri =
     Filter.add_query filters (api_path app ("/n/" ^ namespace_id ^ "/messages"))
   in
   call_parse ~access_token `GET Inbox_j.message_list_of_string uri
 
-let get_message ~access_token ~app namespace_id message_id =
+let get_message { access_token; app; namespace_id } message_id =
   let uri = api_path app ("/n/" ^ namespace_id ^ "/messages/" ^ message_id) in
   call_parse ~access_token `GET Inbox_j.message_of_string uri
 
 (** Returns the rfc2822 message, which is encoded as a base-64 string. *)
-let get_raw_message_64 ~access_token ~app namespace_id message_id =
+let get_raw_message_64 { access_token; app; namespace_id } message_id =
   let uri = api_path app ("/n/" ^ namespace_id ^ "/messages/" ^ message_id ^ "/rfc2822") in
   call_parse ~access_token `GET Inbox_j.message_raw_of_string uri
 
 (** Gets the raw message as a normal string. *)
-let get_raw_message ~access_token ~app namespace_id message_id =
-  get_raw_message_64 ~access_token ~app namespace_id message_id >>= fun { mr_rfc2822 } ->
+let get_raw_message ({ access_token; app; namespace_id } as access) message_id =
+  get_raw_message_64 access message_id >>= fun { mr_rfc2822 } ->
   return (Base64.decode mr_rfc2822)
 
 (** Gets the raw message and parses it into a `complex_mime_message'. *)
-let get_raw_message_mime ~access_token ~app namespace_id message_id =
-  get_raw_message ~access_token ~app namespace_id message_id >>= fun str ->
+let get_raw_message_mime ({ access_token; app; namespace_id } as access) message_id =
+  get_raw_message access message_id >>= fun str ->
   let input = new Nlstream.input_stream (new Nlchannels.input_string str) in
   return (Nlmime.read_mime_message input)
 
 (** Gets the global Message-id, if one exists. *)
-let get_message_id_mime ~access_token ~app namespace_id message_id =
-  get_raw_message_mime ~access_token ~app namespace_id message_id >>= fun (headers, _) ->
+let get_message_id_mime ({ access_token; app; namespace_id } as access) message_id =
+  get_raw_message_mime access message_id >>= fun (headers, _) ->
   let id =
     try Some (List.assoc "Message-Id" headers#fields) with Not_found -> None
   in
   return id
 
-let get_thread_messages ~access_token ~app namespace_id thread =
-  get_messages ~access_token ~app namespace_id [`Thread_id thread.tr_id]
+let get_thread_messages ({ access_token; app; namespace_id } as access) thread =
+  get_messages access [`Thread_id thread.tr_id]
 
 (** Sends a message, creating a new thread. *)
-let send_new_message ~access_token ~app namespace_id message =
+let send_new_message { access_token; app; namespace_id } message =
   let body = Inbox_j.string_of_message_edit message in
   let uri = api_path app ("/n/" ^ namespace_id ^ "/send") in
   call_parse ~access_token ~body `POST Inbox_j.message_of_string uri
 
 (* Drafts *)
-let get_drafts ~access_token ~app namespace_id =
+let get_drafts { access_token; app; namespace_id } =
   let uri = api_path app ("/n/" ^ namespace_id ^ "/drafts") in
   call_parse ~access_token `GET Inbox_j.draft_list_of_string uri
 
-let get_draft ~access_token ~app namespace_id draft_id =
+let get_draft { access_token; app; namespace_id } draft_id =
   let uri = api_path app ("/n/" ^ namespace_id ^ "/drafts/" ^ draft_id) in
   call_parse ~access_token `GET Inbox_j.draft_of_string uri
   
-let create_draft ~access_token ~app namespace_id message =
+let create_draft { access_token; app; namespace_id } message =
   let body = Inbox_j.string_of_message_edit message in
   let uri = api_path app ("/n/" ^ namespace_id ^ "/drafts") in
   call_parse ~access_token ~body `POST Inbox_j.draft_of_string uri
@@ -145,27 +151,27 @@ let create_draft ~access_token ~app namespace_id message =
  *  replying to a thread have their subject set automatically by the
  *  Inbox API.
  *)
-let reply_draft ~access_token ~app namespace_id thread_id message =
+let reply_draft ({ access_token; app; namespace_id } as access) thread_id message =
   let message = { message with me_subject = None; me_thread_id = Some thread_id } in
-  create_draft ~access_token ~app namespace_id message
+  create_draft access message
 
 (** Updates the *latest version* of the given file. *)
-let update_draft ~access_token ~app namespace_id draft_id draft_edit =
-  get_draft ~access_token ~app namespace_id draft_id >>= fun { dr_version } ->
+let update_draft ({ access_token; app; namespace_id } as access) draft_id draft_edit =
+  get_draft access draft_id >>= fun { dr_version } ->
   let draft_edit = { draft_edit with de_version = Some dr_version } in
   let body = Inbox_j.string_of_draft_edit draft_edit in
   let uri = api_path app ("/n/" ^ namespace_id ^ "/drafts/" ^ draft_id) in
   call_parse ~access_token ~body `PUT Inbox_j.draft_of_string uri
 
 (** Deletes the latest version of the specified draft. *)
-let delete_draft ~access_token ~app namespace_id draft_id =
-  get_draft ~access_token ~app namespace_id draft_id >>= fun draft ->
+let delete_draft ({ access_token; app; namespace_id } as access) draft_id =
+  get_draft access draft_id >>= fun draft ->
   let uri = api_path app ("/n/" ^ namespace_id ^ "/drafts/" ^ draft_id) in
   let dd = Inbox_v.create_draft_delete ~dd_version:draft.dr_version () in
   let body = Inbox_j.string_of_draft_delete dd in
   call_parse ~access_token ~body `DELETE (fun x -> x) uri
 
-let send_draft ~access_token ~app namespace_id draft =
+let send_draft { access_token; app; namespace_id } draft =
   let body = Inbox_j.string_of_draft_send {
     ds_draft_id = draft.dr_id;
     ds_version  = draft.dr_version
@@ -175,7 +181,7 @@ let send_draft ~access_token ~app namespace_id draft =
   call_parse ~access_token ~body `POST Inbox_j.draft_of_string uri
 
 (* Files *)
-let get_files ~access_token ~app namespace_id filters =
+let get_files { access_token; app; namespace_id } filters =
   let uri =
     Filter.add_query filters (api_path app ("/n/" ^ namespace_id ^ "/files"))
   in
@@ -195,7 +201,7 @@ let part_of_file content_type filename content =
     body = content
   }
 
-let upload_file ~access_token ~app namespace_id content_type filename content =
+let upload_file { access_token; app; namespace_id } content_type filename content =
   let file_part = part_of_file content_type filename content in
   let (header, body) = Multipart.request_of_parts "form-data" [file_part] in
   let headers = [
@@ -205,59 +211,60 @@ let upload_file ~access_token ~app namespace_id content_type filename content =
   let uri = api_path app ("/n/" ^ namespace_id ^ "/files/") in
   call_parse ~access_token ~headers ~body `POST Inbox_j.file_list_of_string uri
 
-let attach_file ~access_token ~app namespace_id file_id draft_id =
-  get_draft ~access_token ~app namespace_id draft_id >>= fun { dr_files } ->
+let attach_file ({ access_token; app; namespace_id } as access) file_id draft_id =
+  get_draft access draft_id >>= fun { dr_files } ->
   let file_ids = List.map (fun { fi_id } -> fi_id) dr_files in
   let draft_edit =
     Inbox_v.create_draft_edit ~de_file_ids:(file_id::file_ids) ()
   in
-  update_draft ~access_token ~app namespace_id draft_id draft_edit
+  update_draft access draft_id draft_edit
 
 (* TODO: Better error handling. *)
-let send_with_file ~access_token ~app namespace_id message content_type filename content =
-  create_draft ~access_token ~app namespace_id message >>= fun draft ->
-  upload_file ~access_token ~app namespace_id content_type filename content >>= function
+let send_with_file
+      ({ access_token; app; namespace_id } as access) message content_type filename content =
+  create_draft access message >>= fun draft ->
+  upload_file access content_type filename content >>= function
     | []      -> return None
-    | file::_ -> attach_file ~access_token ~app namespace_id file.fi_id draft.dr_id >>= fun draft ->
-  send_draft ~access_token ~app namespace_id draft >>= fun draft ->
+    | file::_ -> attach_file access file.fi_id draft.dr_id >>= fun draft ->
+  send_draft access draft >>= fun draft ->
   return (Some draft)
 
 (* Calendar APIs *)
-let get_calendars ~access_token ~app namespace_id =
+let get_calendars { access_token; app; namespace_id } =
   let uri = api_path app ("/n/" ^ namespace_id ^ "/calendars") in
   call_parse ~access_token `GET Inbox_j.calendar_list_of_string uri
 
-let get_calendar ~access_token ~app namespace_id calendar_id=
+let get_calendar { access_token; app; namespace_id } calendar_id=
   let uri = api_path app ("/n/" ^ namespace_id ^ "/calendars/" ^ calendar_id) in
   call_parse ~access_token `GET Inbox_j.calendar_of_string uri
 
-let get_event ~access_token ~app namespace_id event_id =
+let get_event { access_token; app; namespace_id } event_id =
   let uri = api_path app ("/n/" ^ namespace_id ^ "/events/" ^ event_id) in
   call_parse ~access_token `GET Inbox_j.event_of_string uri
 
-let get_events ~access_token ~app namespace_id filters =
+let get_events { access_token; app; namespace_id } filters =
   let uri =
     Filter.add_query filters (api_path app ("/n/" ^ namespace_id ^ "/events"))
   in
   call_parse ~access_token `GET Inbox_j.event_list_of_string uri
 
-let create_event ~access_token ~app namespace_id event_edit =
+let create_event { access_token; app; namespace_id } event_edit =
   let uri = api_path app ("/n/" ^ namespace_id ^ "/events") in
   let body = Inbox_j.string_of_event_edit event_edit in
   call_parse ~access_token ~body `POST Yojson.Safe.from_string uri
 
-let update_event ~access_token ~app namespace_id event_id event_edit =
+let update_event { access_token; app; namespace_id } event_id event_edit =
   let uri = api_path app ("/n/" ^ namespace_id ^ "/events/" ^ event_id) in
   let body = Inbox_j.string_of_event_edit event_edit in
   call_parse ~access_token ~body `PUT Yojson.Safe.from_string uri
 
 (* Delta Sync *)
-let delta_sync_start ~access_token ~app namespace_id timestamp =
+let delta_sync_start { access_token; app; namespace_id } timestamp =
   let uri = api_path app ("/n/" ^ namespace_id ^ "/delta/generate_cursor") in
   let body = Inbox_j.string_of_start_time { start = timestamp } in
   call_parse ~access_token ~body `POST Inbox_j.cursor_response_of_string uri
 
-let delta_sync_update ~access_token ~app namespace_id ?(exclude = []) cursor =
+let delta_sync_update { access_token; app; namespace_id } ?(exclude = []) cursor =
   let base = api_path app ("/n/" ^ namespace_id ^ "/delta") in
   let with_cursor = Uri.add_query_params' base ["cursor", cursor] in
   let uri =
